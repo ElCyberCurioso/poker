@@ -1,0 +1,12 @@
+{
+  "name": "poker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Poker: Texas Hold'em con dinero ficticio, multijugador P2P, bots y academia. Sitio estático para GitHub Pages.",
+  "scripts": {
+    "test": "node tests/run.js",
+    "serve": "python3 -m http.server 8080"
+  },
+  "license": "MIT"
+}
