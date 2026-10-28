@@ -180,6 +180,18 @@ export class GameRunner {
     this.emit();
   }
 
+  // Cambio de nombre o avatar de un jugador ya sentado.
+  updatePlayer(id, { name, avatar }) {
+    const seat = this.table.seatOf(id);
+    if (seat < 0) return;
+    const p = this.table.seats[seat];
+    if (name) p.name = name;
+    if (avatar) p.avatar = avatar;
+    const hu = this.humans.get(id);
+    if (hu && name) hu.name = name;
+    this.emit();
+  }
+
   setSittingOut(id, value) {
     const seat = this.table.seatOf(id);
     if (seat < 0) return;

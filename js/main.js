@@ -63,7 +63,7 @@ function parseRoute() {
   const raw = (location.hash || '#/').replace(/^#\/?/, '');
   const [path, anchor] = raw.split('#');
   const parts = path.split('/').filter(Boolean);
-  return { name: parts[0] || '', arg: parts[1] || '', anchor: anchor || '' };
+  return { name: parts[0] || '', arg: parts[1] || '', arg2: parts[2] || '', anchor: anchor || '' };
 }
 
 // ---------------- Shell ----------------
@@ -139,7 +139,7 @@ function route() {
     switch (r.name) {
       case '': renderHome(c, app); break;
       case 'online': renderOnline(c, app); break;
-      case 'sala': joinRoom(c, r.arg, app); break;
+      case 'sala': joinRoom(c, r.arg, app, r.arg2); break;
       case 'academia': if (r.arg) renderLesson(c, r.arg, app); else renderAcademy(c, app); break;
       case 'entrenar': renderTrainer(c, r.arg, app); break;
       case 'herramientas': renderTools(c, r.arg, app); break;
@@ -174,6 +174,7 @@ function showTable() {
   const opts = app.sessionOpts || {};
   app.sessionOpts = null;
   if (opts.openRoom) setTimeout(() => view.openRoomPanel(), 400);
+  if (opts.notice) setTimeout(() => toast(opts.notice.text, { type: opts.notice.type, ms: 4500 }), 600);
   if (opts.askSit) setTimeout(() => { if (s.view && s.view.seats.some((x) => !x)) view.askSit(); }, 500);
 }
 
@@ -192,10 +193,18 @@ store.onEvent((ev) => {
     app.applySettings();
   }
 });
+let lastProfile = { name: store.get().profile.name, avatar: store.get().profile.avatar };
 store.subscribe(() => {
+  const p = store.get().profile;
   if (shell) {
     shell.balance.querySelector('.num').textContent = fmt(store.get().balance);
-    shell.avatar.textContent = store.get().profile.avatar;
+    shell.avatar.textContent = p.avatar;
+  }
+  // Un cambio de nombre o avatar se refleja al momento en la mesa en la que estés.
+  if (p.name !== lastProfile.name || p.avatar !== lastProfile.avatar) {
+    lastProfile = { name: p.name, avatar: p.avatar };
+    const sess = app.session;
+    if (sess && !sess.closed && typeof sess.updateProfile === 'function') sess.updateProfile(p.name, p.avatar);
   }
 });
 setInterval(() => { if (shell) updateShell(parseRoute()); }, 1000);
@@ -208,7 +217,7 @@ window.addEventListener('beforeunload', (e) => {
   }
 });
 
-function welcome() {
+function welcome(invited = false) {
   const s = store.get();
   let avatar = s.profile.avatar;
   const name = h('input.input', { type: 'text', maxlength: '18', value: s.profile.name, 'aria-label': 'Tu nombre' });
@@ -220,14 +229,17 @@ function welcome() {
   modal({
     title: 'Bienvenido a Poker',
     body: h('div.stack',
-      h('p', `Te regalamos ${fmt(s.balance)} fichas para empezar. Son ficticias: no se compran ni se cobran, sólo sirven para jugar, aprender y presumir.`),
+      invited
+        ? h('p', `Te han invitado a una mesa y ya te estamos sentando. Tienes ${fmt(s.balance)} fichas de regalo (ficticias: no se compran ni se cobran). Elige cómo te verán los demás; puedes cambiarlo cuando quieras.`)
+        : h('p', `Te regalamos ${fmt(s.balance)} fichas para empezar. Son ficticias: no se compran ni se cobran, sólo sirven para jugar, aprender y presumir.`),
       h('div.field', h('label', '¿Cómo te llamamos en la mesa?'), name),
       h('div.field', h('span.label', 'Elige avatar'), grid),
     ),
-    actions: [{ label: 'Empezar', primary: true, onClick: () => {
+    actions: [{ label: invited ? 'Listo' : 'Empezar', primary: true, onClick: () => {
       const n = cleanName(name.value);
       store.update((st) => { if (n.length >= 2) st.profile.name = n; st.profile.avatar = avatar; });
-      route();
+      // En plena conexión o en la mesa no se vuelve a enrutar (abriría una segunda conexión).
+      if (!['sala', 'mesa'].includes(parseRoute().name)) route();
     } }],
   });
 }
@@ -240,7 +252,10 @@ window.addEventListener('hashchange', route);
 route();
 if (rec.total > 0) toast(`Recuperaste ${fmt(rec.total)} fichas de una mesa que quedó abierta`, { type: 'gold', icon: '♻️', ms: 5000 });
 settlePendingWheel();
-if (store.isFresh()) setTimeout(welcome, 300);
+if (store.isFresh()) {
+  const r0 = parseRoute();
+  setTimeout(() => welcome(r0.name === 'sala' && !!r0.arg2), 300);
+}
 
 if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
   window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => { /* sin PWA */ }));

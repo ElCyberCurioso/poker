@@ -2,7 +2,8 @@
 // Todos los mensajes entrantes se validan; el contenido de usuario se trata siempre como texto.
 import { LocalSession } from '../game/session.js';
 import { createHost } from './transport.js';
-import { cleanName, cleanText, randomHex } from '../util.js';
+import { cleanName, cleanText, randomHex, fmt } from '../util.js';
+import { newInviteKey, safeEqual, inviteLink } from './invite.js';
 import { sngPayouts } from '../game/runner.js';
 import { store } from '../store.js';
 
@@ -11,6 +12,7 @@ const MAX_CLIENTS_EXTRA = 8; // espectadores además de los asientos
 const GRACE_MS = 90000;
 const PROTOCOL = 1;
 
+const ACCESS = ['code', 'password', 'invite'];
 const isInt = (x) => Number.isInteger(x);
 const isStr = (x, max) => typeof x === 'string' && x.length <= max;
 
@@ -22,11 +24,18 @@ export class HostSession extends LocalSession {
   constructor(opts) {
     super(opts);
     this.kind = 'host';
+    const password = String(opts.room.password || '').slice(0, 32);
+    let access = ACCESS.includes(opts.room.access) ? opts.room.access : (password ? 'password' : 'code');
+    if (access === 'password' && !password) access = 'code';
     this.room = {
       code: opts.room.code,
       name: cleanName(opts.room.name || opts.table.name, 30) || 'Sala privada',
-      password: opts.room.password || '',
+      password,
+      access,
+      inviteKey: newInviteKey(),
+      guestsCanInvite: opts.room.guestsCanInvite !== false,
     };
+    this.authFailures = [];
     this.clients = new Set();
     this.byToken = new Map(); // token -> client
     this.banned = new Set();
@@ -59,7 +68,8 @@ export class HostSession extends LocalSession {
       minBuyIn: t.minBuyIn, maxBuyIn: t.maxBuyIn,
       maxSeats: t.maxSeats,
       turnTime: this.runner.opts.turnTime,
-      hasPassword: !!this.room.password,
+      access: this.room.access,
+      hasPassword: this.room.access === 'password',
       sngBuyIn: this.mode === 'sng' ? this.opts.sng.buyIn : 0,
       startingStack: this.mode === 'sng' ? this.opts.sng.startingStack : 0,
       levelHands: this.mode === 'sng' ? this.opts.sng.levelHands : 0,
@@ -113,6 +123,7 @@ export class HostSession extends LocalSession {
       case 'sit': return this._sit(client, msg);
       case 'show': if (client.id) this.runner.showCards(client.id); return;
       case 'leave': return this._leave(client);
+      case 'profile': return this._profile(client, msg);
       default: return;
     }
   }
@@ -125,11 +136,16 @@ export class HostSession extends LocalSession {
     const avatar = validAvatar(msg.avatar) ? msg.avatar : '🙂';
     if (!token) { this._send(client, { t: 'reject', reason: 'Identificador no válido' }); return this._drop(client); }
     if (this.banned.has(token)) { this._send(client, { t: 'reject', reason: 'El anfitrión te ha expulsado de esta sala' }); return this._drop(client); }
-    if (this.room.password && (!isStr(msg.password, 64) || msg.password !== this.room.password)) {
-      this._send(client, { t: 'reject', reason: 'Contraseña incorrecta', code: 'password' });
-      return this._drop(client, 1200);
+    // Una credencial ya admitida (reconexión) no vuelve a pasar el control de acceso.
+    const known = this.byToken.has(token);
+    const invite = isStr(msg.invite, 64) ? msg.invite : '';
+    const viaInvite = !!invite && safeEqual(invite, this.room.inviteKey);
+    if (!known && !viaInvite) {
+      const denied = this._checkAccess(msg, !!invite);
+      if (denied) { this._send(client, { t: 'reject', ...denied }); return this._drop(client, 1200); }
     }
     clearTimeout(client.authTimer);
+    client.viaInvite = viaInvite;
     client.token = token;
     client.name = name;
     client.avatar = avatar;
@@ -147,7 +163,7 @@ export class HostSession extends LocalSession {
       this.byToken.set(token, client);
       if (client.id && this.runner.seatOf(client.id) >= 0) {
         this.runner.setConnected(client.id, true);
-        this._send(client, { t: 'welcome', id: client.id, charge: 0, reconnected: true, spectator: false, room: this.roomInfo() });
+        this._welcome(client, { id: client.id, charge: 0, reconnected: true, spectator: false });
         this._system(`${name} ha vuelto a conectarse`);
         this._sendState(client, []);
         return;
@@ -157,16 +173,42 @@ export class HostSession extends LocalSession {
     this.byToken.set(token, client);
     const wantsSeat = !msg.spectate;
     if (wantsSeat) {
-      const res = this._seat(client, msg.buyIn);
+      const res = this._seat(client, msg.buyIn, msg.budget);
       if (res.ok) return;
       client.spectator = true;
-      this._send(client, { t: 'welcome', id: null, charge: 0, spectator: true, note: res.reason, room: this.roomInfo() });
+      this._welcome(client, { id: null, charge: 0, spectator: true, note: res.reason });
     } else {
       client.spectator = true;
-      this._send(client, { t: 'welcome', id: null, charge: 0, spectator: true, room: this.roomInfo() });
+      this._welcome(client, { id: null, charge: 0, spectator: true });
     }
     this._system(`${name} está mirando la mesa`);
     this._sendState(client, []);
+  }
+
+  _welcome(client, data) {
+    const msg = { t: 'welcome', ...data, room: this.roomInfo() };
+    if (this.room.guestsCanInvite) msg.invite = this.room.inviteKey;
+    this._send(client, msg);
+  }
+
+  // Devuelve null si se permite entrar, o el motivo del rechazo.
+  _checkAccess(msg, staleInvite) {
+    const { access, password } = this.room;
+    if (access === 'invite') {
+      return { code: 'invite', reason: staleInvite ? 'Este enlace de invitación ya no es válido: el anfitrión lo ha renovado. Pídele uno nuevo.' : 'Esta sala sólo admite jugadores con enlace de invitación. Pídeselo al anfitrión.' };
+    }
+    if (access === 'password') {
+      const now = Date.now();
+      this.authFailures = this.authFailures.filter((t) => now - t < 60000);
+      if (this.authFailures.length >= 8) return { code: 'throttled', reason: 'Demasiados intentos fallidos en esta sala. Espera un minuto y vuelve a probar.' };
+      const given = isStr(msg.password, 64) ? msg.password : '';
+      if (!given || !safeEqual(given, password)) {
+        if (given) this.authFailures.push(now);
+        const reason = staleInvite ? 'Este enlace de invitación ya no es válido. Introduce la contraseña o pide un enlace nuevo.' : given ? 'Contraseña incorrecta' : 'Esta sala tiene contraseña';
+        return { code: 'password', reason };
+      }
+    }
+    return null;
   }
 
   // Si la mesa está llena de bots, uno cede su asiento a un invitado humano.
@@ -184,24 +226,31 @@ export class HostSession extends LocalSession {
     return false;
   }
 
-  _seat(client, buyInRaw) {
+  // buyInRaw: cantidad concreta o 'auto' (enlace de invitación: 100 ciegas grandes dentro de los límites y del saldo).
+  _seat(client, buyInRaw, budgetRaw) {
     const t = this.opts.table;
+    const budget = isInt(budgetRaw) && budgetRaw >= 0 ? budgetRaw : Infinity;
     if (this.mode === 'sng' && this.runner.sng.started) return { ok: false, reason: 'El torneo ya ha empezado' };
-    if (!this._freeSeatFromBot()) return { ok: false, reason: 'Mesa llena: podrás sentarte cuando termine la mano o quede un asiento libre' };
     let charge;
     if (this.mode === 'sng') {
       charge = this.opts.sng.buyIn;
+      if (charge > budget) return { ok: false, reason: `Necesitas ${fmt(charge)} fichas para la inscripción. De momento miras la mesa.` };
+    } else if (buyInRaw === 'auto') {
+      const preferred = Math.max(t.minBuyIn, Math.min(t.maxBuyIn, t.bb * 100));
+      charge = Math.min(preferred, budget);
+      if (charge < t.minBuyIn) return { ok: false, reason: `Para sentarte necesitas al menos ${fmt(t.minBuyIn)} fichas. De momento miras la mesa.` };
     } else {
       const b = isInt(buyInRaw) ? buyInRaw : t.minBuyIn;
       charge = Math.max(t.minBuyIn, Math.min(t.maxBuyIn, b));
     }
+    if (!this._freeSeatFromBot()) return { ok: false, reason: 'Mesa llena: podrás sentarte cuando quede un asiento libre' };
     const id = 'u-' + randomHex(4);
     const seat = this.runner.addHuman({ id, name: client.name, avatar: client.avatar, stack: charge });
     if (seat < 0) return { ok: false, reason: 'No quedan asientos libres' };
     client.id = id;
     client.spectator = false;
     client.charge = charge;
-    this._send(client, { t: 'welcome', id, charge, spectator: false, room: this.roomInfo() });
+    this._welcome(client, { id, charge, spectator: false, auto: buyInRaw === 'auto' });
     this._system(`${client.name} se ha sentado`);
     this._sendState(client, []);
     return { ok: true };
@@ -209,7 +258,7 @@ export class HostSession extends LocalSession {
 
   _sit(client, msg) {
     if (client.id) return;
-    const res = this._seat(client, msg.buyIn);
+    const res = this._seat(client, msg.buyIn, msg.budget);
     if (!res.ok) this._send(client, { t: 'error', text: res.reason });
   }
 
@@ -243,6 +292,20 @@ export class HostSession extends LocalSession {
     const seat = this.runner.seatOf(client.id);
     if (seat < 0) return;
     this._queue([{ type: 'emote', seat, emoji: msg.emoji }]);
+  }
+
+  _profile(client, msg) {
+    const now = Date.now();
+    if (client.lastProfile && now - client.lastProfile < 3000) return;
+    client.lastProfile = now;
+    const name = cleanName(msg.name) || client.name;
+    const avatar = validAvatar(msg.avatar) ? msg.avatar : client.avatar;
+    if (name === client.name && avatar === client.avatar) return;
+    const old = client.name;
+    client.name = name;
+    client.avatar = avatar;
+    if (client.id) this.runner.updatePlayer(client.id, { name, avatar });
+    if (old !== name) this._system(`${old} ahora se llama ${name}`);
   }
 
   _rebuy(client, msg) {
@@ -409,17 +472,62 @@ export class HostSession extends LocalSession {
     return ok;
   }
 
+  // Expulsa y bloquea su credencial. Si podía conocer el enlace de invitación, se renueva para que no vuelva a entrar.
   kick(seat) {
     const p = this.runner.table.seats[seat];
-    if (!p || p.isBot || p.id === this.heroId) return;
+    if (!p || p.isBot || p.id === this.heroId) return { ok: false };
+    let renewed = false;
     for (const c of this.clients) {
       if (c.id === p.id) {
         this.banned.add(c.token);
         this._send(c, { t: 'kicked' });
         this._leave(c);
         this._system(`${c.name} ha sido expulsado`);
+        if (this.room.access !== 'code' && (c.viaInvite || this.room.guestsCanInvite)) renewed = true;
       }
     }
+    if (renewed) this.regenerateInvite(true);
+    return { ok: true, renewed };
+  }
+
+  // ---------- Invitaciones y acceso ----------
+  inviteUrl() {
+    return inviteLink(this.room.code, this.room.inviteKey);
+  }
+
+  regenerateInvite(silent = false) {
+    this.room.inviteKey = newInviteKey();
+    if (this.room.guestsCanInvite) {
+      for (const c of this.clients) if (c.authed && !c.ghost) this._send(c, { t: 'invite', key: this.room.inviteKey });
+    }
+    if (!silent) this._system('El anfitrión ha renovado el enlace de invitación: los anteriores ya no sirven');
+    this.emit({ type: 'room' });
+    return this.room.inviteKey;
+  }
+
+  setAccess(access, password) {
+    if (!ACCESS.includes(access)) return { ok: false, error: 'Modo de acceso no válido' };
+    const pw = String(password ?? this.room.password ?? '').trim().slice(0, 32);
+    if (access === 'password' && !pw) return { ok: false, error: 'Escribe una contraseña' };
+    this.room.access = access;
+    if (access === 'password') this.room.password = pw;
+    this.authFailures = [];
+    this.emit({ type: 'room' });
+    return { ok: true };
+  }
+
+  setGuestsCanInvite(value) {
+    this.room.guestsCanInvite = !!value;
+    const key = value ? this.room.inviteKey : null;
+    for (const c of this.clients) if (c.authed && !c.ghost) this._send(c, { t: 'invite', key });
+    this.emit({ type: 'room' });
+  }
+
+  updateProfile(name, avatar) {
+    const seat = this.runner.seatOf(this.heroId);
+    const old = seat >= 0 ? this.runner.table.seats[seat].name : null;
+    super.updateProfile(name, avatar);
+    if (old && old !== name) this._system(`${old} ahora se llama ${name}`);
   }
 
   startSng() {

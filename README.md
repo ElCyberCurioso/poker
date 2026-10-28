@@ -8,7 +8,7 @@ Texas Hold'em No-Limit con **fichas ficticias**, pensado para desplegarse como s
 - Seis mesas de cash contra bots (de 5/10 a 500/1.000), incluida una mesa completa de 9 y una heads-up. Entras con parte de tu saldo y te llevas tu stack al salir.
 - Cuatro torneos Sit & Go (2, 6 y 9 jugadores) con ciegas crecientes, antes y premios por puesto.
 - Seis estilos de bot con personalidad propia (Roca, Regular, Agresivo, Maníaco, Pescadito, Tiburón): usan rangos de apertura por posición antes del flop y equity Monte Carlo frente a rangos estimados después. Sólo ven sus propias cartas.
-- Salas privadas online (cash o torneo) con código de 6 caracteres, enlace, QR, contraseña opcional, bots de relleno, chat y reacciones. El anfitrión puede pausar, añadir/quitar bots, expulsar y empezar el torneo.
+- Salas privadas online (cash o torneo) con **enlaces de invitación de un clic**, QR, código de 6 caracteres, tres modos de acceso, bots de relleno, chat y reacciones. El anfitrión puede pausar, añadir/quitar bots, expulsar y empezar el torneo.
 
 **Mesa**
 - Motor completo: ciegas y antes, botes laterales, devolución de apuestas no igualadas, regla del all-in incompleto que no reabre la acción, reparto de fichas impares, heads-up con el orden correcto.
@@ -56,7 +56,28 @@ Los módulos ES no funcionan abriendo `index.html` con doble clic (`file://`): h
 npm test
 ```
 
-Comprueban el evaluador de manos, la equity exacta (AA contra KK ≈ 81,9 %), los botes laterales, las reglas de subida, un fuzz de más de mil manos aleatorias con conservación exacta de fichas (incluidas desconexiones y jugadores que se levantan a mitad de mano), los perfiles de los bots, un Sit & Go completo y la verificación de barajas.
+Comprueban las claves y enlaces de invitación, el evaluador de manos, la equity exacta (AA contra KK ≈ 81,9 %), los botes laterales, las reglas de subida, un fuzz de más de mil manos aleatorias con conservación exacta de fichas (incluidas desconexiones y jugadores que se levantan a mitad de mano), los perfiles de los bots, un Sit & Go completo y la verificación de barajas.
+
+## Invitaciones de un clic
+
+Al crear una sala, el panel del anfitrión muestra un **enlace de invitación** (también como QR) con la forma:
+
+```
+https://TU_USUARIO.github.io/poker/#/sala/ABC234/k3m9x2q7vb8nt4wd
+                                         código  clave de invitación
+```
+
+Quien lo abre entra en la sala y **se sienta automáticamente**: sin teclear código ni contraseña y sin diálogo de fichas (entra con 100 ciegas grandes dentro de los límites de la mesa y de su saldo; si no le llega, entra mirando y se le avisa). Si es la primera vez que usa la app, recibe sus fichas de regalo y puede elegir nombre y avatar ya sentado: el cambio se ve al momento en la mesa.
+
+- **Quién puede entrar** (se elige al crear la sala y se puede cambiar en cualquier momento desde el panel):
+  - *Código o invitación*: entra cualquiera con el código o con el enlace.
+  - *Contraseña o invitación*: con el código hace falta la contraseña; el enlace entra directamente.
+  - *Sólo invitación*: el código por sí solo no sirve.
+- **Renovar enlace** invalida todos los enlaces enviados hasta ese momento (quien ya está dentro no se ve afectado). Al expulsar a alguien que podía conocer el enlace, se renueva solo.
+- **Los jugadores también pueden invitar** (activado por defecto): los invitados ven un botón *Invitar* con el enlace vigente, que se actualiza si el anfitrión lo renueva.
+- El campo *Unirse* del inicio acepta el código o el enlace completo pegado.
+
+Detalles de seguridad: la clave tiene 80 bits aleatorios (`crypto.getRandomValues`) y va después del `#`, así que el navegador nunca la envía a GitHub Pages ni aparece en sus registros. Se compara en tiempo constante, la app la retira de la barra de direcciones en cuanto entras, y los intentos fallidos de contraseña tienen un límite de 8 por minuto por sala. Un enlace es tan secreto como el canal por el que lo envíes: si se filtra, renuévalo.
 
 ## Cómo funciona el multijugador
 
@@ -70,7 +91,8 @@ Comprueban el evaluador de manos, la equity exacta (AA contra KK ≈ 81,9 %), lo
 - **Baraja verificable**: antes de repartir cada mano, el anfitrión publica `SHA-256(baraja + sal)`; al terminar revela la baraja y la sal, y cada invitado comprueba el hash, que no hay cartas repetidas y que sus propias cartas y el tablero salen de las posiciones correctas. El resultado aparece junto al título de la mesa ("verificada"). Esto impide cambiar la baraja a mitad de mano, pero el anfitrión técnicamente puede ver todas las cartas: jugad con gente de confianza.
 - Las barajas se mezclan con Fisher–Yates usando `crypto.getRandomValues` con rechazo para evitar sesgo.
 - Todo lo que llega por la red se valida (tipos, longitudes, acciones permitidas, cantidades enteras) y tiene límite de frecuencia; mensajes de más de 64 KB se descartan. Nombres y chat se insertan siempre como texto (`textContent`), nunca como HTML, y se eliminan caracteres de control y de control bidireccional.
-- Las credenciales de reconexión de cada invitado son aleatorias y se guardan sólo en la pestaña (`sessionStorage`).
+- Las credenciales de reconexión de cada invitado son aleatorias y se guardan sólo en la pestaña (`sessionStorage`); una reconexión con una credencial ya admitida no vuelve a pasar el control de acceso.
+- Para desarrollo o redes propias se puede usar un servidor PeerJS propio guardando en `localStorage` la clave `poker.peerServer` (por ejemplo `{"host":"127.0.0.1","port":9000,"path":"/poker","secure":false}`). A propósito no se acepta por URL: un enlace no debe poder desviar la señalización a un servidor ajeno.
 - Al ser fichas ficticias guardadas en `localStorage`, cualquiera puede editarlas desde la consola del navegador. No hay nada que ganar haciéndolo.
 
 ## Estructura
@@ -88,7 +110,7 @@ js/core/                Lógica pura, sin DOM (testeada en Node)
   bots.js               Decisiones de los bots por estilo
 js/game/runner.js       Ritmo de juego, temporizadores, Sit & Go, baraja verificable
 js/game/session.js      Sesión local y registro de estadísticas/logros
-js/net/                 Transporte P2P (PeerJS / BroadcastChannel), anfitrión, invitado
+js/net/                 Transporte P2P (PeerJS / BroadcastChannel), anfitrión, invitado, invitaciones
 js/ui/                  Pantallas: mesa, lobby, academia, entrenadores, herramientas, ruleta, perfil
 js/data/                Lecciones, mesas, logros, misiones, premios de la ruleta
 vendor/                 PeerJS 1.5.5 y qrcode-generator 2.0.4 (MIT)

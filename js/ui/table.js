@@ -7,7 +7,7 @@ import { handInfo } from '../core/evaluator.js';
 import { equityVsRanges } from '../core/equity.js';
 import { EMOTES } from '../net/host.js';
 import { BOT_STYLES } from '../core/bots.js';
-import { roomPanel } from './room.js';
+import { roomPanel, shareInvite } from './room.js';
 
 const ACTION_TEXT = { fold: 'No va', check: 'Pasa', call: 'Iguala', bet: 'Apuesta', raise: 'Sube a', allin: 'All-in', sb: 'Ciega pequeña', bb: 'Ciega grande' };
 
@@ -61,9 +61,11 @@ export class TableView {
     this.soundBtn = h('button.icon-btn', { type: 'button', 'aria-label': 'Sonido', title: 'Sonido', onclick: () => this.toggleSound() });
     this.chatBadge = h('span.badge', { hidden: true }, '0');
     this.chatBtn = h('button.icon-btn', { type: 'button', 'aria-label': s.kind === 'local' ? 'Registro de la mano' : 'Chat y registro', title: 'Chat y registro', onclick: () => this.toggleDrawer() }, svgIcon(s.kind === 'local' ? 'i-history' : 'i-chat'), this.chatBadge);
+    this.inviteBtn = h('button.btn.btn-felt.btn-sm.invite-btn', { type: 'button', title: 'Enviar un enlace con el que entran y se sientan directamente', onclick: () => this.invite() }, svgIcon('i-link'), h('span', 'Invitar'));
     const bar = h('header.tbar',
       h('button.icon-btn', { type: 'button', 'aria-label': 'Salir de la mesa', title: 'Salir de la mesa', onclick: () => this.confirmLeave() }, svgIcon('i-back')),
       h('div.title', this.titleEl, h('span', this.subEl, ' ', this.shieldEl)),
+      this.inviteBtn,
       this.soundBtn,
       this.chatBtn,
       h('button.icon-btn', { type: 'button', 'aria-label': 'Menú de la mesa', title: 'Menú', onclick: () => this.openMenu() }, svgIcon('i-more')),
@@ -99,7 +101,24 @@ export class TableView {
       if (ev.type === 'settings') this.render(this.session.view, []);
     });
     this.updateSoundBtn();
+    this.updateInviteBtn();
     if (s.view) this.render(s.view, []);
+  }
+
+  // ---------- Invitaciones ----------
+  inviteUrl() {
+    const s = this.session;
+    return typeof s.inviteUrl === 'function' ? s.inviteUrl() : null;
+  }
+
+  updateInviteBtn() {
+    this.inviteBtn.hidden = !this.inviteUrl();
+  }
+
+  invite() {
+    const url = this.inviteUrl();
+    if (!url) { toast('El anfitrión no ha permitido que los jugadores inviten', { type: 'error' }); return; }
+    shareInvite(url, this.session.tableName);
   }
 
   destroy() {
@@ -123,7 +142,8 @@ export class TableView {
       case 'closed': this.onClosed(ev.reason); break;
       case 'notice': toast(ev.text, { type: ev.error ? 'error' : 'info' }); break;
       case 'reconnecting': this.showReconnecting(true); break;
-      case 'welcome': this.showReconnecting(false); if (ev.note) toast(ev.note); break;
+      case 'welcome': this.showReconnecting(false); if (ev.note) toast(ev.note); this.updateInviteBtn(); break;
+      case 'invite': case 'room': this.updateInviteBtn(); break;
       case 'deck': this.updateShield(ev.status); break;
       case 'netStatus':
         if (ev.status.type === 'signal-lost') toast('Conexión con el servidor de emparejamiento perdida: la partida sigue, pero nadie nuevo podrá unirse hasta que se recupere', { type: 'error', ms: 5000 });
@@ -1050,7 +1070,10 @@ export class TableView {
         { label: 'Cerrar' },
         p.isBot
           ? { label: 'Quitar bot', danger: true, onClick: () => { s.removeBot(i); } }
-          : { label: 'Expulsar', danger: true, onClick: () => { s.kick(i); } },
+          : { label: 'Expulsar', danger: true, onClick: () => {
+            const r = s.kick(i);
+            if (r && r.renewed) toast('Expulsado. El enlace de invitación se ha renovado para que no pueda volver a entrar: comparte el nuevo con el resto.', { ms: 5500 });
+          } },
       ],
     });
   }
@@ -1162,7 +1185,8 @@ export class TableView {
     const items = h('div.stack');
     const close = () => m.close();
     const menuBtn = (icon, label, fn, cls = '.btn-ghost') => h('button.btn.btn-block' + cls, { type: 'button', style: { justifyContent: 'flex-start' }, onclick: () => { close(); fn(); } }, svgIcon(icon), label);
-    if (s.isHost()) items.appendChild(menuBtn('i-users', 'Sala: código, jugadores y bots', () => this.openRoomPanel(), '.btn-felt'));
+    if (s.isHost()) items.appendChild(menuBtn('i-users', 'Invitar y gestionar la sala', () => this.openRoomPanel(), '.btn-felt'));
+    else if (this.inviteUrl()) items.appendChild(menuBtn('i-link', 'Invitar a la mesa', () => this.invite(), '.btn-felt'));
     if (p && s.mode === 'cash') items.appendChild(menuBtn('i-chip', 'Recargar fichas', () => this.showRebuy(false)));
     if (p && !(v.sng)) items.appendChild(menuBtn(p.sittingOut ? 'i-resume' : 'i-pause', p.sittingOut ? 'Volver a jugar' : 'Ausentarme desde la próxima mano', () => s.sitOut(!p.sittingOut)));
     if (s.isHost()) items.appendChild(menuBtn(v && v.paused ? 'i-resume' : 'i-pause', v && v.paused ? 'Reanudar la partida' : 'Pausar la partida', () => s.setPaused(!(v && v.paused))));

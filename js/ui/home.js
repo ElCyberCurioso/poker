@@ -1,11 +1,12 @@
 // Lobby: mesas contra bots, torneos, partidas privadas, bono diario y misiones.
-import { h, svgIcon, fmt, fmtShort, toast, modal, normalizeCode, isValidCode } from '../util.js';
+import { h, svgIcon, fmt, fmtShort, toast, modal } from '../util.js';
 import { store } from '../store.js';
 import { CASH_TABLES, SNG_TABLES } from '../data/tables.js';
 import { DAILY_BONUS, levelFromXp, xpForLevel, levelTitle, BAILOUT_AMOUNT, BAILOUT_COOLDOWN_MS } from '../data/progress.js';
 import { LocalSession } from '../game/session.js';
 import { sngPayouts } from '../game/runner.js';
 import { buyInDialog } from './table.js';
+import { joinBox } from './online.js';
 import { pips, progressBar } from './components.js';
 import { play } from '../audio.js';
 import { LESSONS } from '../data/lessons.js';
@@ -124,26 +125,18 @@ export function renderHome(root, app) {
   ));
 
   // Con amigos
-  const codeInput = h('input.input.code', { type: 'text', maxlength: '6', placeholder: 'CÓDIGO', autocomplete: 'off', autocapitalize: 'characters', spellcheck: 'false', 'aria-label': 'Código de sala' });
-  codeInput.addEventListener('input', () => { codeInput.value = normalizeCode(codeInput.value); });
-  const join = () => {
-    const c = normalizeCode(codeInput.value);
-    if (!isValidCode(c)) { toast('El código tiene 6 caracteres (letras y números)', { type: 'error' }); codeInput.focus(); return; }
-    app.navigate('#/sala/' + c);
-  };
-  codeInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') join(); });
   root.appendChild(h('section.section',
-    h('div.section-head', h('div', h('h2.h2', 'Con amigos'), h('p', 'Salas privadas online: crea una, comparte el código y jugad desde el móvil o el ordenador.'))),
+    h('div.section-head', h('div', h('h2.h2', 'Con amigos'), h('p', 'Salas privadas online: crea una, envía el enlace de invitación y jugad desde el móvil o el ordenador.'))),
     h('div.grid-2',
       h('div.panel.stack',
         h('div.h3', 'Crear una sala'),
-        h('p.muted.small', { style: { margin: 0 } }, 'Tú eres el anfitrión: eliges ciegas, asientos, contraseña y si rellenar con bots. Cash o torneo.'),
+        h('p.muted.small', { style: { margin: 0 } }, 'Tú eres el anfitrión: eliges ciegas, asientos y quién puede entrar, y compartes un enlace con el que tus amigos se sientan con un clic.'),
         h('a.btn.btn-primary', { href: '#/online' }, svgIcon('i-users'), 'Crear sala privada'),
       ),
       h('div.panel.stack',
-        h('div.h3', 'Unirse con un código'),
-        h('p.muted.small', { style: { margin: 0 } }, 'Pide el código de seis caracteres a quien ha creado la sala.'),
-        h('div.join-inline', codeInput, h('button.btn.btn-felt', { type: 'button', onclick: join }, 'Entrar')),
+        h('div.h3', 'Unirse a una sala'),
+        h('p.muted.small', { style: { margin: 0 } }, 'Abre el enlace de invitación que te hayan enviado, o escribe aquí el código de seis caracteres.'),
+        joinBox(app),
       ),
     ),
   ));

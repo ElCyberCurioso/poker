@@ -402,6 +402,7 @@ body[data-back="laton"] .pcard.back::after { color: rgba(58, 15, 22, .65); }
 .tbar .title { flex: 1; min-width: 0; text-align: center; line-height: 1.2; }
 .tbar .title strong { display: block; font-family: var(--font-display); font-weight: 700; font-size: 1.1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tbar .title span { font-size: .78rem; color: var(--text-faint); font-weight: 600; }
+.tbar .title > span { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tbar .shield { display: inline-flex; align-items: center; gap: 4px; color: var(--ok); font-weight: 700; }
 .tbar .shield.bad { color: var(--bad); }
 .tbar .shield svg { width: 14px; height: 14px; display: inline-block; vertical-align: -2px; }
@@ -887,7 +888,18 @@ button.seat-empty-btn:hover { border-color: var(--brass); color: var(--brass-hi)
 
 /* Sala online */
 .room-card { display: flex; flex-direction: column; gap: 14px; }
-.room-code { font-family: var(--font-display); font-weight: 800; font-size: 2.6rem; letter-spacing: .14em; color: var(--brass-hi); line-height: 1; }
+.room-code { font-family: var(--font-display); font-weight: 800; font-size: 1.6rem; letter-spacing: .14em; color: var(--brass-hi); line-height: 1; }
+.invite-block { display: flex; gap: 20px; align-items: flex-start; padding: 16px; border-radius: var(--r-m); border: 1px solid rgba(200, 162, 78, .35); background: rgba(200, 162, 78, .06); }
+.invite-url { min-height: 40px; font-size: .82rem; color: var(--brass-hi); text-overflow: ellipsis; }
+.tbar .invite-btn { min-height: 36px; margin-right: 2px; }
+@media (max-width: 600px) {
+  .invite-block { flex-direction: column; align-items: stretch; }
+  .invite-block .qr { align-self: center; }
+  .tbar .invite-btn { padding: 6px 10px; }
+  .tbar .invite-btn span { display: none; }
+  .seg.seg-col { display: flex; flex-direction: column; align-items: stretch; width: 100%; }
+  .seg.seg-col button { text-align: left; padding: 10px 12px; }
+}
 .qr { background: var(--ivory); border-radius: 14px; padding: 10px; width: 168px; height: 168px; display: grid; place-items: center; }
 .qr img { width: 100%; height: 100%; image-rendering: pixelated; }
 .notice { padding: 12px 14px; border-radius: 12px; border: 1px solid var(--line-strong); background: rgba(0, 0, 0, .2); font-size: .88rem; color: var(--text-dim); display: flex; gap: 10px; align-items: flex-start; }

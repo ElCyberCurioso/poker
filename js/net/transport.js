@@ -79,6 +79,23 @@ function wrapPeerConn(conn) {
   };
 }
 
+// Servidor de señalización: el público de PeerJS por defecto. Para desarrollo o redes propias se puede apuntar
+// a un servidor PeerJS propio guardando en localStorage 'poker.peerServer' = {"host","port","path","secure"}.
+// Deliberadamente no se acepta por URL: un enlace no debe poder desviar la señalización a un servidor ajeno.
+function customServer() {
+  try {
+    const raw = localStorage.getItem('poker.peerServer');
+    if (!raw) return {};
+    const c = JSON.parse(raw);
+    const out = {};
+    if (typeof c.host === 'string' && /^[a-z0-9.-]{1,253}$/i.test(c.host)) out.host = c.host;
+    if (Number.isInteger(c.port) && c.port > 0 && c.port < 65536) out.port = c.port;
+    if (typeof c.path === 'string' && /^\/[\w/-]{0,60}$/.test(c.path)) out.path = c.path;
+    if (typeof c.secure === 'boolean') out.secure = c.secure;
+    return out;
+  } catch (e) { return {}; }
+}
+
 const PEER_OPTS = { debug: 0, config: { iceServers: [
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun1.l.google.com:19302' },
@@ -90,7 +107,7 @@ class PeerHost {
   async start() {
     await loadPeerJS();
     return new Promise((resolve, reject) => {
-      const peer = new window.Peer(PREFIX + this.code.toLowerCase(), PEER_OPTS);
+      const peer = new window.Peer(PREFIX + this.code.toLowerCase(), { ...PEER_OPTS, ...customServer() });
       this.peer = peer;
       let opened = false;
       const timer = setTimeout(() => { if (!opened) { reject(new NetError('server', 'El servidor de emparejamiento no responde')); peer.destroy(); } }, 15000);
@@ -117,7 +134,7 @@ class PeerHost {
 async function peerConnect(code, timeoutMs = 15000) {
   await loadPeerJS();
   return new Promise((resolve, reject) => {
-    const peer = new window.Peer(PEER_OPTS);
+    const peer = new window.Peer({ ...PEER_OPTS, ...customServer() });
     let done = false;
     const fail = (e) => { if (done) return; done = true; clearTimeout(timer); try { peer.destroy(); } catch (x) { /* */ } reject(e); };
     const timer = setTimeout(() => fail(new NetError('timeout', 'No se pudo conectar con la sala (tiempo agotado). Puede que una red restrictiva bloquee WebRTC')), timeoutMs);

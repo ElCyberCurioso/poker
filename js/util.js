@@ -201,7 +201,7 @@ export function modal({ title, body, actions = [], onClose, wide = false, dismis
   document.addEventListener('keydown', onKey);
   requestAnimationFrame(() => {
     overlay.classList.add('in');
-    const f = dialog.querySelector('input, button.btn-primary, button.btn, [tabindex="0"]');
+    const f = dialog.querySelector('[autofocus]') || dialog.querySelector('input:not([readonly]), button.btn-primary, button.btn, [tabindex="0"]');
     if (f) f.focus({ preventScroll: true });
   });
   return { close, el: dialog };

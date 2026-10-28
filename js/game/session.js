@@ -250,6 +250,10 @@ export class LocalSession extends BaseSession {
     this.pushChat({ name: s.profile.name, avatar: s.profile.avatar, text, seat: this.view ? this.view.you : -1, ts: Date.now(), me: true });
   }
 
+  updateProfile(name, avatar) {
+    if (!this.closed) this.runner.updatePlayer(this.heroId, { name, avatar });
+  }
+
   emote(emoji) {
     this.emit({ type: 'update', view: this.view, events: [{ type: 'emote', seat: this.view.you, emoji }] });
   }

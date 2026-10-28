@@ -5,6 +5,7 @@ import { store } from '../store.js';
 import { randomHex, cleanText } from '../util.js';
 import { verifyDeck } from '../game/runner.js';
 import { EMOTES } from './host.js';
+import { isInviteKey, inviteLink } from './invite.js';
 
 const PROTOCOL = 1;
 const TOKENS_KEY = 'poker.tokens';
@@ -26,13 +27,16 @@ export function forgetToken(code) {
 }
 
 export class ClientSession extends BaseSession {
-  constructor({ code, buyIn, password, spectate }) {
+  // invite: clave del enlace de invitación (entra sin contraseña). autoSit: sentarse al llegar con la entrada por defecto.
+  constructor({ code, buyIn, password, spectate, invite, autoSit }) {
     super();
     this.kind = 'client';
     this.code = code;
-    this.buyIn = buyIn;
+    this.buyIn = autoSit ? 'auto' : buyIn;
     this.password = password || '';
-    this.spectate = !!spectate;
+    this.invite = isInviteKey(invite) ? invite : '';
+    this.spectate = !!spectate && !autoSit;
+    this.inviteKey = null; // clave vigente que el anfitrión nos deja compartir
     this.token = getToken(code);
     this.conn = null;
     this.myId = null;
@@ -61,7 +65,10 @@ export class ClientSession extends BaseSession {
 
   _hello() {
     const s = store.get();
-    this.conn.send({ t: 'hello', v: PROTOCOL, name: s.profile.name, avatar: s.profile.avatar, token: this.token, password: this.password, buyIn: this.buyIn, spectate: this.spectate });
+    this.conn.send({
+      t: 'hello', v: PROTOCOL, name: s.profile.name, avatar: s.profile.avatar, token: this.token,
+      password: this.password, invite: this.invite, buyIn: this.buyIn, budget: s.balance, spectate: this.spectate,
+    });
   }
 
   _bind(conn) {
@@ -132,6 +139,9 @@ export class ClientSession extends BaseSession {
       }
       case 'error': return this.emit({ type: 'notice', text: String(m.text || 'Error').slice(0, 120), error: true });
       case 'pong': this.latency = Date.now() - (Number(m.ts) || Date.now()); return;
+      case 'invite':
+        this.inviteKey = isInviteKey(m.key) ? m.key : null;
+        return this.emit({ type: 'invite' });
       default: return;
     }
   }
@@ -139,6 +149,8 @@ export class ClientSession extends BaseSession {
   _welcome(m) {
     this.room = m.room || this.room;
     this.mode = this.room && this.room.mode === 'sng' ? 'sng' : 'cash';
+    this.inviteKey = isInviteKey(m.invite) ? m.invite : null;
+    let seatedWith = 0;
     this.myId = typeof m.id === 'string' ? m.id : null;
     const charge = Math.max(0, Math.floor(Number(m.charge) || 0));
     if (charge > 0 && !m.reconnected) {
@@ -149,6 +161,7 @@ export class ClientSession extends BaseSession {
       } else {
         this.charged += charge;
         this.credited = false;
+        seatedWith = charge;
         this.lastStack = this.mode === 'cash' ? charge : 0;
         store.setSession({ kind: 'client', stack: this.mode === 'cash' ? charge : 0, label: this.tableName, code: this.code });
       }
@@ -156,7 +169,7 @@ export class ClientSession extends BaseSession {
     if (this._welcomeWaiter) { this._welcomeWaiter.resolve(m); this._welcomeWaiter = null; }
     if (m.reconnected) this.emit({ type: 'notice', text: 'Conexión recuperada' });
     this.reconnecting = false;
-    this.emit({ type: 'welcome', spectator: !!m.spectator, note: m.note });
+    this.emit({ type: 'welcome', spectator: !!m.spectator, note: m.note, seatedWith, auto: !!m.auto, reconnected: !!m.reconnected });
   }
 
   _state(m) {
@@ -250,7 +263,9 @@ export class ClientSession extends BaseSession {
   sitOut(v) { this.conn && this.conn.send({ t: 'sitout', value: !!v }); }
   chat(text) { const t = cleanText(text, 200); if (t && this.conn) this.conn.send({ t: 'chat', text: t }); }
   emote(emoji) { if (EMOTES.includes(emoji) && this.conn) this.conn.send({ t: 'emote', emoji }); }
-  sit(buyIn) { this.buyIn = buyIn; this.conn && this.conn.send({ t: 'sit', buyIn }); }
+  sit(buyIn) { this.buyIn = buyIn; this.conn && this.conn.send({ t: 'sit', buyIn, budget: store.get().balance }); }
+  updateProfile(name, avatar) { if (this.conn && this.conn.open) this.conn.send({ t: 'profile', name, avatar }); }
+  inviteUrl() { return this.inviteKey ? inviteLink(this.code, this.inviteKey) : null; }
 
   canRebuy() {
     if (this.mode !== 'cash' || !this.view || !this.myId || !this.room) return false;

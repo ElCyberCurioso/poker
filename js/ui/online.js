@@ -1,22 +1,49 @@
 // Crear una sala privada y unirse a una existente.
-import { h, clear, svgIcon, fmt, toast, modal, randomCode, normalizeCode, isValidCode, cleanName } from '../util.js';
+import { h, clear, svgIcon, fmt, toast, modal, randomCode, normalizeCode, isValidCode, cleanName, confirmDialog } from '../util.js';
 import { store } from '../store.js';
 import { HostSession } from '../net/host.js';
 import { ClientSession } from '../net/client.js';
 import { transportKind } from '../net/transport.js';
+import { parseInvite, isInviteKey, ACCESS_MODES } from '../net/invite.js';
 import { buyInDialog } from './table.js';
-import { segmented } from './components.js';
+import { segmented, toggleRow } from './components.js';
+
+// Campo para unirse: acepta el código de 6 caracteres o un enlace de invitación pegado (entra al momento).
+export function joinBox(app) {
+  const input = h('input.input.code', { type: 'text', placeholder: 'CÓDIGO', autocomplete: 'off', autocapitalize: 'characters', spellcheck: 'false', 'aria-label': 'Código de sala o enlace de invitación' });
+  const go = (parsed) => app.navigate('#/sala/' + parsed.code + (parsed.key ? '/' + parsed.key : ''));
+  input.addEventListener('input', () => {
+    const p = parseInvite(input.value);
+    if (p.isLink) {
+      if (isValidCode(p.code)) { input.value = p.code; go(p); }
+      return;
+    }
+    input.value = p.code;
+  });
+  const join = () => {
+    const p = parseInvite(input.value);
+    if (!isValidCode(p.code)) { toast('Escribe el código de 6 caracteres o pega el enlace de invitación', { type: 'error' }); input.focus(); return; }
+    go(p);
+  };
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') join(); });
+  return h('div.join-inline', input, h('button.btn.btn-felt', { type: 'button', onclick: join }, 'Entrar'));
+}
 
 const BLINDS = [[5, 10], [10, 20], [25, 50], [50, 100], [100, 200], [250, 500], [500, 1000], [1000, 2000]];
 
 export function renderOnline(root, app) {
   const s = store.get();
   const cfg = {
-    name: `Mesa de ${s.profile.name}`, mode: 'cash', blinds: 1, depth: 'normal', seats: 6, turn: 25, bots: 0, botLevel: 1, password: '',
+    name: `Mesa de ${s.profile.name}`, mode: 'cash', blinds: 1, depth: 'normal', seats: 6, turn: 25, bots: 0, botLevel: 1, access: 'code', guestsCanInvite: true,
     sngBuyIn: 1000, startingStack: 1500, levelHands: 8,
   };
   const name = h('input.input', { type: 'text', maxlength: '30', value: cfg.name, 'aria-label': 'Nombre de la sala' });
-  const pass = h('input.input', { type: 'text', maxlength: '32', placeholder: 'Opcional', autocomplete: 'off', 'aria-label': 'Contraseña' });
+  const pass = h('input.input', { type: 'text', maxlength: '32', placeholder: 'Contraseña para entrar con el código', autocomplete: 'off', 'aria-label': 'Contraseña' });
+  const accessHint = h('span.hint');
+  const renderAccess = () => {
+    pass.hidden = cfg.access !== 'password';
+    accessHint.textContent = ACCESS_MODES.find((a) => a.value === cfg.access).desc;
+  };
   const cashBox = h('div.stack');
   const sngBox = h('div.stack', { hidden: true });
   const summary = h('p.small.muted', { style: { margin: 0 } });
@@ -48,7 +75,10 @@ export function renderOnline(root, app) {
   cashBox.append(h('div.grid-2', h('div.field', h('label', 'Ciegas'), blindSel), h('div.field', h('label', 'Entrada'), depthSel)));
   sngBox.append(h('div.grid-3', h('div.field', h('label', 'Inscripción'), sngBuy), h('div.field', h('label', 'Fichas iniciales'), sngStack), h('div.field', h('label', 'Subida de ciegas'), sngLevel)));
   const createBtn = h('button.btn.btn-primary', { type: 'button' }, svgIcon('i-users'), 'Crear sala');
-  createBtn.addEventListener('click', () => createRoom(cfg, { name, pass, createBtn, depthRange }, app));
+  createBtn.addEventListener('click', () => {
+    if (cfg.access === 'password' && !pass.value.trim()) { toast('Escribe la contraseña o elige otro modo de acceso', { type: 'error' }); pass.focus(); return; }
+    createRoom(cfg, { name, pass, createBtn, depthRange }, app);
+  });
 
   const form = h('div.panel.stack',
     h('div.field', h('label', 'Nombre de la sala'), name),
@@ -59,27 +89,22 @@ export function renderOnline(root, app) {
       h('div.field', h('span.label', 'Tiempo por turno'), segmented([{ value: 15, label: '15 s' }, { value: 25, label: '25 s' }, { value: 40, label: '40 s' }, { value: 60, label: '60 s' }], 25, (v) => { cfg.turn = v; })),
       h('div.field', h('span.label', 'Nivel de los bots'), segmented([{ value: 0, label: 'Fácil' }, { value: 1, label: 'Medio' }, { value: 3, label: 'Difícil' }], 1, (v) => { cfg.botLevel = v; })),
     ),
-    h('div.field', h('label', 'Contraseña'), pass, h('span.hint', 'Si la pones, tus amigos la necesitarán además del código.')),
+    h('div.field', h('span.label', 'Quién puede entrar'),
+      (() => { const sg = segmented(ACCESS_MODES.map((a) => ({ value: a.value, label: a.label })), cfg.access, (v) => { cfg.access = v; renderAccess(); if (v === 'password') pass.focus(); }, { label: 'Quién puede entrar' }); sg.classList.add('seg-col'); return sg; })(),
+      pass, accessHint),
+    toggleRow({ title: 'Los jugadores también pueden invitar', desc: 'Además de ti, cualquiera sentado podrá compartir el enlace de invitación', checked: cfg.guestsCanInvite, onChange: (v) => { cfg.guestsCanInvite = v; } }),
     summary,
     h('div.row', createBtn),
   );
 
-  const codeInput = h('input.input.code', { type: 'text', maxlength: '6', placeholder: 'CÓDIGO', autocomplete: 'off', autocapitalize: 'characters', spellcheck: 'false', 'aria-label': 'Código de sala' });
-  codeInput.addEventListener('input', () => { codeInput.value = normalizeCode(codeInput.value); });
-  const join = () => {
-    const c = normalizeCode(codeInput.value);
-    if (!isValidCode(c)) { toast('El código tiene 6 caracteres', { type: 'error' }); return; }
-    app.navigate('#/sala/' + c);
-  };
-  codeInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') join(); });
 
   root.append(
-    h('div.section-head', h('div', h('h1.h1', 'Salas privadas'), h('p.lead', 'Juega con tus amigos desde cualquier dispositivo. No hace falta registrarse: comparte el código de seis caracteres y listo.'))),
+    h('div.section-head', h('div', h('h1.h1', 'Salas privadas'), h('p.lead', 'Juega con tus amigos desde cualquier dispositivo. Crea la sala y envíales el enlace de invitación: con abrirlo, entran y se sientan.'))),
     h('div.grid-2', { style: { alignItems: 'start' } },
       h('div.stack', h('h2.h2', 'Crear sala'), form),
       h('div.stack',
         h('h2.h2', 'Unirse'),
-        h('div.panel.stack', h('p.muted.small', { style: { margin: 0 } }, 'Escribe el código que te han pasado. Primero verás la mesa y después eliges con cuántas fichas sentarte.'), h('div.join-inline', codeInput, h('button.btn.btn-felt', { type: 'button', onclick: join }, 'Entrar'))),
+        h('div.panel.stack', h('p.muted.small', { style: { margin: 0 } }, 'Lo más rápido es abrir el enlace de invitación que te hayan enviado. Si sólo tienes el código, escríbelo aquí (o pega el enlace).'), joinBox(app)),
         h('div.notice', svgIcon('i-info'), h('div',
           h('strong', 'Cómo funciona. '),
           'La mesa se ejecuta en el navegador de quien crea la sala y los demás se conectan directamente (WebRTC). Quien crea la sala debe dejar la pestaña abierta durante la partida. Algunas redes corporativas o de móvil muy restrictivas pueden bloquear la conexión.',
@@ -89,6 +114,7 @@ export function renderOnline(root, app) {
     ),
   );
   refresh();
+  renderAccess();
 }
 
 async function createRoom(cfg, { name, pass, createBtn, depthRange }, app) {
@@ -114,7 +140,7 @@ async function createRoom(cfg, { name, pass, createBtn, depthRange }, app) {
       table, buyIn, bots: cfg.bots, botLevel: cfg.botLevel, turnTime: cfg.turn, verifiable: true,
       sng: cfg.mode === 'sng' ? { buyIn: cfg.sngBuyIn, startingStack: cfg.startingStack, levelHands: cfg.levelHands } : undefined,
       autoStartSng: false,
-      room: { code, name: table.name, password: pass.value.trim().slice(0, 32) },
+      room: { code, name: table.name, access: cfg.access, password: cfg.access === 'password' ? pass.value.trim().slice(0, 32) : '', guestsCanInvite: cfg.guestsCanInvite },
     });
     try { await h0.open(); host = h0; } catch (e) { lastErr = e; if (e.code !== 'taken') break; }
   }
@@ -130,44 +156,64 @@ async function createRoom(cfg, { name, pass, createBtn, depthRange }, app) {
   app.startSession(host, { openRoom: true });
 }
 
-// Ruta #/sala/CODIGO: conecta como espectador y propone sentarse.
-export async function joinRoom(root, rawCode, app) {
+// Ruta #/sala/CODIGO[/CLAVE].
+// Sin clave: conecta como espectador y propone sentarse. Con clave de invitación: entra sin contraseña y se sienta solo.
+export async function joinRoom(root, rawCode, app, rawKey) {
   const code = normalizeCode(rawCode);
+  const key = isInviteKey(rawKey) ? rawKey : null;
   if (!isValidCode(code)) { toast('Código de sala no válido', { type: 'error' }); app.navigate('#/online'); return; }
-  if (app.session && !app.session.closed) {
-    if (app.session.code === code) { app.navigate('#/mesa'); return; }
-    toast('Sal primero de tu mesa actual', { type: 'error' });
-    app.navigate('#/mesa');
-    return;
+  const cur = app.session;
+  if (cur && !cur.closed) {
+    const curCode = cur.code || (cur.room && cur.room.code);
+    if (curCode === code) { app.navigate('#/mesa'); return; }
+    const ok = await confirmDialog('¿Cambiar de mesa?',
+      cur.kind === 'host'
+        ? `Estás alojando «${cur.tableName}». Si te unes a esta invitación se cerrará tu sala para todos y cada jugador recuperará sus fichas.`
+        : `Estás jugando en «${cur.tableName}». Si te unes a esta invitación saldrás de esa mesa y tu stack volverá a tu saldo.`,
+      { ok: 'Salir y unirme', danger: cur.kind === 'host' });
+    if (!ok) { app.navigate('#/mesa'); return; }
+    cur.leave();
+    app.session = null;
   }
-  const status = h('p.lead', 'Conectando con la sala ' + code + '…');
-  root.appendChild(h('div.empty', h('div.big', '🃏'), status));
-  const tryJoin = async (password) => {
-    const c = new ClientSession({ code, spectate: true, password });
+  clear(root).appendChild(h('div.empty', h('div.big', '🃏'), h('p.lead', key ? `Entrando por invitación en la sala ${code}…` : `Conectando con la sala ${code}…`)));
+
+  const attempt = async (password, invite) => {
+    const c = new ClientSession({ code, password, invite, autoSit: !!invite || (!!key && !!password), spectate: !invite && !key });
     try {
-      await c.connect();
-      return c;
+      const welcome = await c.connect();
+      return { client: c, welcome };
     } catch (e) {
       if (e.code === 'password') {
-        const pw = await askPassword(password ? 'Contraseña incorrecta. Inténtalo de nuevo.' : 'Esta sala tiene contraseña.');
+        const pw = await askPassword(password ? 'Contraseña incorrecta. Inténtalo de nuevo.' : e.message);
         if (!pw) return null;
-        return tryJoin(pw);
+        return attempt(pw, '');
       }
       throw e;
     }
   };
   try {
-    const client = await tryJoin('');
-    if (!client) { app.navigate('#/online'); return; }
-    app.startSession(client, { askSit: true });
+    const res = await attempt('', key || '');
+    if (!res) { app.navigate('#/online'); return; }
+    const { client, welcome } = res;
+    // La clave no se queda a la vista en la barra de direcciones una vez dentro.
+    if (key) { try { history.replaceState(null, '', location.pathname + location.search + '#/sala/' + code); } catch (e) { /* */ } }
+    let notice = null;
+    if (welcome.note) notice = { text: welcome.note, type: 'info' };
+    else if (welcome.id && welcome.charge > 0) {
+      notice = client.mode === 'sng'
+        ? { text: `Te has inscrito en el torneo (${fmt(welcome.charge)} fichas). ¡Suerte!`, type: 'success' }
+        : { text: `Te has sentado con ${fmt(welcome.charge)} fichas. Puedes recargar desde el menú ⋯`, type: 'success' };
+    }
+    app.startSession(client, { askSit: !key && !welcome.id, notice });
   } catch (e) {
+    const dead = e.code === 'invite';
     clear(root).appendChild(h('div.empty',
-      h('div.big', '🚪'),
-      h('h2.h2', 'No se pudo entrar en la sala'),
+      h('div.big', dead ? '🔒' : '🚪'),
+      h('h2.h2', dead ? (key ? 'Invitación no válida' : 'Sala sólo con invitación') : 'No se pudo entrar en la sala'),
       h('p', e.message || 'Error de conexión'),
       h('div.row', { style: { justifyContent: 'center' } },
-        h('button.btn.btn-primary', { type: 'button', onclick: () => app.rerender() }, svgIcon('i-refresh'), 'Reintentar'),
-        h('a.btn.btn-ghost', { href: '#/online' }, 'Volver'),
+        dead ? null : h('button.btn.btn-primary', { type: 'button', onclick: () => joinRoom(root, code, app, key) }, svgIcon('i-refresh'), 'Reintentar'),
+        h('a.btn.btn-ghost', { href: '#/' }, 'Ir al inicio'),
       ),
     ));
   }
